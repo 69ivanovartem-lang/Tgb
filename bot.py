@@ -68,7 +68,7 @@ class Database:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                SELECT id, title, created_at 
+                SELECT id, title, content, tags, created_at 
                 FROM notes 
                 WHERE user_id = ? 
                 ORDER BY created_at DESC
@@ -174,6 +174,74 @@ def create_commands_keyboard():
     )
     return keyboard
 
+def send_notes_list(chat_id, user_id, message_id=None):
+    """Отправляет список заметок пользователя"""
+    try:
+        notes = db.get_user_notes(user_id)
+
+        if not notes:
+            text = "📭 У вас пока нет заметок.\nСоздайте первую через /new"
+            if message_id:
+                bot.edit_message_text(
+                    text,
+                    chat_id,
+                    message_id,
+                    reply_markup=create_main_keyboard()
+                )
+            else:
+                bot.send_message(
+                    chat_id,
+                    text,
+                    reply_markup=create_main_keyboard()
+            )
+            return
+
+        keyboard = InlineKeyboardMarkup()
+        for note in notes:
+            note_id = note[0]
+            title = note[1]
+            created_at = note[4] if len(note) > 4 else note[2]  # Безопасное получение даты
+            # Обрезаем длинный заголовок
+            display_title = title[:30] + "..." if len(title) > 30 else title
+            date_str = created_at[:10] if created_at else "???"
+            keyboard.add(InlineKeyboardButton(
+                f"📄 {display_title} ({date_str})",
+                callback_data=f"view_note_{note_id}"
+            ))
+
+        text = f"📚 Ваши заметки ({len(notes)}):\n\nНажмите на заметку для просмотра и управления:"
+        
+        if message_id:
+            bot.edit_message_text(
+                text,
+                chat_id,
+                message_id,
+                reply_markup=keyboard
+            )
+        else:
+            bot.send_message(
+                chat_id,
+                text,
+                reply_markup=keyboard
+            )
+            
+    except Exception as e:
+        logger.error(f"Ошибка при получении списка заметок: {e}")
+        error_text = "❌ Произошла ошибка при получении списка заметок."
+        if message_id:
+            bot.edit_message_text(
+                error_text,
+                chat_id,
+                message_id,
+                reply_markup=create_main_keyboard()
+            )
+        else:
+            bot.send_message(
+                chat_id,
+                error_text,
+                reply_markup=create_main_keyboard()
+            )
+
 # Команды
 @bot.message_handler(commands=['start'])
 def start_command(message):
@@ -246,96 +314,7 @@ def new_note_command(message):
 @bot.message_handler(commands=['notes'])
 def list_notes_command(message):
     """Показать список заметок пользователя"""
-    user_id = message.from_user.id
-    
-    try:
-        notes = db.get_user_notes(user_id)
-
-        if not notes:
-            bot.send_message(
-                message.chat.id,
-                "📭 У вас пока нет заметок.\nСоздайте первую через /new",
-                reply_markup=create_main_keyboard()
-            )
-            return
-
-        keyboard = InlineKeyboardMarkup()
-        for note in notes:
-            note_id = note[0]
-            title = note[1]
-            created_at = note[2]
-            # Обрезаем длинный заголовок
-            display_title = title[:30] + "..." if len(title) > 30 else title
-            keyboard.add(InlineKeyboardButton(
-                f"📄 {display_title} ({created_at[:10]})",
-                callback_data=f"view_note_{note_id}"
-            ))
-
-        bot.send_message(
-            message.chat.id,
-            "📚 Ваши заметки:\n\nНажмите на заметку для просмотра и управления:",
-            reply_markup=keyboard
-        )
-        
-    except Exception as e:
-        logger.error(f"Ошибка при получении списка заметок: {e}")
-        bot.send_message(
-            message.chat.id, 
-            "❌ Произошла ошибка при получении списка заметок.",
-            reply_markup=create_main_keyboard()
-        )
-
-@bot.message_handler(commands=['search'])
-def search_notes_command(message):
-    """Поиск по заметкам"""
-    if not message.text or len(message.text.split()) < 2:
-        bot.send_message(
-            message.chat.id,
-            "🔍 Введите запрос для поиска:\n\nПример: программирование",
-            reply_markup=ReplyKeyboardMarkup(resize_keyboard=True).add(KeyboardButton("📋 Главное меню"))
-        )
-        return
-
-    query = ' '.join(message.text.split()[1:])
-    user_id = message.from_user.id
-    
-    try:
-        notes = db.search_notes(user_id, query)
-
-        if not notes:
-            bot.send_message(
-                message.chat.id,
-                f"🔎 По запросу '{query}' ничего не найдено.",
-                reply_markup=create_main_keyboard()
-            )
-            return
-
-        keyboard = InlineKeyboardMarkup()
-        for note in notes:
-            note_id = note[0]
-            title = note[1]
-            content = note[2]
-            # Обрезаем длинный контент для кнопки
-            short_content = content[:30] + "..." if len(content) > 30 else content
-            display_title = title[:20] + "..." if len(title) > 20 else title
-            keyboard.add(InlineKeyboardButton(
-                f"🔍 {display_title}: {short_content}",
-                callback_data=f"view_note_{note_id}"
-            ))
-
-        bot.send_message(
-            message.chat.id,
-            f"🔎 Найдено заметок по запросу '{query}': {len(notes)}",
-            reply_markup=keyboard
-        )
-        
-    except Exception as e:
-        logger.error(f"Ошибка при поиске заметок: {e}")
-        bot.send_message(
-            message.chat.id, 
-            "❌ Произошла ошибка при поиске заметок.",
-            reply_markup=create_main_keyboard()
-        )
+    send_notes_list(message.chat.id, message.from_user.id)
 
 # Обработчики кнопок главного меню
 @bot.message_handler(func=lambda message: message.text in ["📝 Новая заметка", "📚 Мои заметки", "🔍 Поиск", "ℹ️ Помощь", "⚡ Все команды", "📋 Главное меню", "❌ Отмена"])
@@ -383,16 +362,18 @@ def handle_main_menu_buttons(message):
 def handle_callback(call):
     """Обработчик нажатий на inline кнопки"""
     user_id = call.from_user.id
+    chat_id = call.message.chat.id
+    message_id = call.message.message_id
     data = call.data
 
     try:
         if data.startswith("view_note_"):
             note_id = int(data.split("_")[2])
-            show_note_detail(call.message, note_id, user_id)
+            show_note_detail(chat_id, message_id, note_id, user_id)
 
         elif data.startswith("link_note_"):
             note_id = int(data.split("_")[2])
-            start_linking(call.message, note_id, user_id)
+            start_linking(chat_id, message_id, note_id, user_id)
 
         elif data.startswith("create_link_"):
             parts = data.split("_")
@@ -401,8 +382,8 @@ def handle_callback(call):
             db.add_link(from_note_id, to_note_id)
             bot.edit_message_text(
                 "✅ Заметки успешно связаны!",
-                call.message.chat.id,
-                call.message.message_id
+                chat_id,
+                message_id
             )
 
         elif data.startswith("delete_note_"):
@@ -410,30 +391,35 @@ def handle_callback(call):
             if db.delete_note(note_id, user_id):
                 bot.edit_message_text(
                     "🗑️ Заметка успешно удалена!",
-                    call.message.chat.id,
-                    call.message.message_id
+                    chat_id,
+                    message_id
                 )
             else:
                 bot.edit_message_text(
                     "❌ Не удалось удалить заметку.",
-                    call.message.chat.id,
-                    call.message.message_id
+                    chat_id,
+                    message_id
                 )
 
         elif data == "back_to_notes":
-            list_notes_command(call.message)
+            # ИСПРАВЛЕНИЕ: Правильный вызов функции для возврата к списку
+            send_notes_list(chat_id, user_id, message_id)
             
     except Exception as e:
         logger.error(f"Ошибка в обработчике кнопок: {e}")
         bot.answer_callback_query(call.id, "❌ Произошла ошибка при обработке запроса.")
 
-def show_note_detail(message, note_id, user_id):
+def show_note_detail(chat_id, message_id, note_id, user_id):
     """Показать детали заметки с кнопками действий"""
     try:
         note = db.get_note(note_id, user_id)
 
         if not note:
-            bot.send_message(message.chat.id, "❌ Заметка не найдена.")
+            bot.edit_message_text(
+                "❌ Заметка не найдена.",
+                chat_id,
+                message_id
+            )
             return
 
         # Правильная распаковка данных
@@ -470,8 +456,8 @@ def show_note_detail(message, note_id, user_id):
 
         bot.edit_message_text(
             text,
-            message.chat.id,
-            message.message_id,
+            chat_id,
+            message_id,
             reply_markup=keyboard,
             parse_mode='HTML'
         )
@@ -480,11 +466,11 @@ def show_note_detail(message, note_id, user_id):
         logger.error(f"Ошибка при показе деталей заметки: {e}")
         bot.edit_message_text(
             "❌ Произошла ошибка при загрузке заметки.",
-            message.chat.id,
-            message.message_id
+            chat_id,
+            message_id
         )
 
-def start_linking(message, from_note_id, user_id):
+def start_linking(chat_id, message_id, from_note_id, user_id):
     """Начать процесс связывания заметок"""
     try:
         notes = db.get_user_notes(user_id)
@@ -492,8 +478,8 @@ def start_linking(message, from_note_id, user_id):
         if len(notes) < 2:
             bot.edit_message_text(
                 "❌ У вас недостаточно заметок для связывания.",
-                message.chat.id,
-                message.message_id
+                chat_id,
+                message_id
             )
             return
 
@@ -513,8 +499,8 @@ def start_linking(message, from_note_id, user_id):
 
         bot.edit_message_text(
             "Выберите заметку для связывания:",
-            message.chat.id,
-            message.message_id,
+            chat_id,
+            message_id,
             reply_markup=keyboard
         )
         
@@ -522,8 +508,8 @@ def start_linking(message, from_note_id, user_id):
         logger.error(f"Ошибка при начале связывания: {e}")
         bot.edit_message_text(
             "❌ Произошла ошибка при начале связывания заметок.",
-            message.chat.id,
-            message.message_id
+            chat_id,
+            message_id
         )
 
 @bot.message_handler(func=lambda message: True)
@@ -594,48 +580,12 @@ def handle_all_messages(message):
                     reply_markup=create_main_keyboard()
                 )
     else:
-        # Обработка поискового запроса
-        if message.text and not message.text.startswith('/'):
-            # Если это не команда и не кнопка меню, считаем что это поисковый запрос
-            query = message.text
-            user_id = message.from_user.id
-            
-            try:
-                notes = db.search_notes(user_id, query)
-
-                if not notes:
-                    bot.send_message(
-                        chat_id,
-                        f"🔎 По запросу '{query}' ничего не найдено.",
-                        reply_markup=create_main_keyboard()
-                    )
-                    return
-
-                keyboard = InlineKeyboardMarkup()
-                for note in notes:
-                    note_id = note[0]
-                    title = note[1]
-                    content = note[2]
-                    short_content = content[:30] + "..." if len(content) > 30 else content
-                    display_title = title[:20] + "..." if len(title) > 20 else title
-                    keyboard.add(InlineKeyboardButton(
-                        f"🔍 {display_title}: {short_content}",
-                        callback_data=f"view_note_{note_id}"
-                    ))
-
-                bot.send_message(
-                    chat_id,
-                    f"🔎 Найдено заметок по запросу '{query}': {len(notes)}",
-                    reply_markup=keyboard
-                )
-                
-            except Exception as e:
-                logger.error(f"Ошибка при поиске заметок: {e}")
-                bot.send_message(
-                    chat_id, 
-                    "❌ Произошла ошибка при поиске заметок.",
-                    reply_markup=create_main_keyboard()
-                )
+        # Если нет активного состояния, показываем справку
+        bot.send_message(
+            chat_id,
+            "🤖 Используйте кнопки для работы с ботом!",
+            reply_markup=create_main_keyboard()
+        )
 
 if __name__ == "__main__":
     logger.info("🤖 Zettelkasten Bot запущен...")
